@@ -1,7 +1,0 @@
-[
-  "tests/test_client.py::test_init",
-  "tests/test_client.py::test_client_init",
-  "tests/test_client.py::test_client_list",
-  "tests/test_data.py::test_results",
-  "tests/test_jsonrpc.py::test_jsonrpc"
-]
