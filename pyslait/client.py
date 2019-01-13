@@ -87,8 +87,12 @@ class Client(object):
             url += "/"
         return url + path  
 
-
-    def list(self, topic=None, partition=None, fromDate=None, toDate=None, last=None, fn_detail_parser=None):
+    def list(self, topic=None, partition=None, fromDate=None, toDate=None, last=None, fn_entry_data_decoder=None):
+        """
+        1. List all topics
+        2. List partitions under specific topic
+        3. List data under specific topic and partition with from,to,last[optional] paramters
+        """
         isDetails = False
 
         if topic is not None and partition is None:
@@ -122,13 +126,11 @@ class Client(object):
 
             rj = r.json()
             if isDetails:
-                if not callable(fn_detail_parser):
-                    def _fn_parser(item):
-                        item['Timestamp']
-                        item['Data']
-                    fn_detail_parser = _fn_parser
+                if not callable(fn_entry_data_decoder):
+                    return TopicsResult(topic=topic, partitions=partition, results=rj['Data'], result_parser=fn_entry_data_decoder)
+                else:
+                    return TopicsResult(topic=topic, partitions=partition, results=rj['Data'])
 
-                return TopicsResult(topic=topic, partitions=partition, results=rj['Data'], raw_parser_fn=fn_detail_parser)
             else:
                 return TopicsResult(topic=topic, partitions=partition, results=rj)
                 
@@ -136,9 +138,47 @@ class Client(object):
             logger.exception(exc)
             raise
 
-    def create(self, topic, partitoins=None):
+    def create(self, topic, partitoins=None, entries=None, fn_entry_data_encoder=None):
+        """
+        1. Create topic
+        2. Create topic and also with partition(s)
+        3. Create entries under specific topic & partition(only one element in the list) and append to data stream
+        Return True as server updated, else False
+        """
 
-        pass        
+        if not topic:
+            return False
+        else:
+            data = {}
+            path = ''
+
+            # 2. Create topic and partitions
+            if isinstance(partitoins,list) and len(partitoins) > 1:
+                path = "topics"
+                data['Topic'] = topic
+                data['Partitions'] = partitoins
+            
+            # 3. Append entries
+            elif isinstance(partitoins, list) and len(partitoins) > 1 and isinstance(entries, list) and len(entries) > 0:
+                
+            # 1. Topic only
+            else:
+                path = "topics"
+                data['Topic'] = topic
+
+            try:
+                u = self._url(path)
+
+                if not data['Topic']:
+                    r = self._session.put(u, data=json.loads(data), headers={"Content-Type": self.mimetype})
+                else:
+                    r = self._session.post(u, data=json.loads(data), headers={"Content-Type": self.mimetype})
+
+                r.raise_for_status()
+                return True
+
+            except requests.exceptions.HTTPError as exc:
+                return False
 
 
     def delete(self):
