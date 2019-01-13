@@ -16,7 +16,8 @@ def test_client_init():
     assert c._endpoint == "http://127.0.0.1:5994/"
 
 def test_client_list():
-    c = pyslait.Client("http://192.168.220.128:5994/")
+    # c = pyslait.Client("http://192.168.220.128:5994/")
+    c = pyslait.Client("http://127.0.0.1:5994/")
     l = c.list()
     print(l)
 

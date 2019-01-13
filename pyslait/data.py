@@ -1,27 +1,17 @@
 import numpy as np
 import pandas as pd
 import six
+from datetime import datetime
 
 def isiterable(something):
     return isinstance(something, (list, tuple, set))
 
-class ResultParser(object):
-    """ 
-    Parse the bytes block to multiple fields.
-    The fn must return an array
-    The dt must be str splited by comma which present the fn's return for np.dtype
-    """
-    fn = None
-    dt = np.dtype("M,V")
-
-    def __init__(self, fn, dt):
-        assert not callable(fn)
-        assert not isinstance(dt, np.dtype)
-        self.fn = fn
-        self.dt = dt
-
 class TopicsResult(object):
     def __init__(self, topic=None, partitions=None, results=None, result_parser=None):
+        """
+        result_parser must be a callback function which 
+        take bytes buffer and return array as parse result
+        """
         if partitions is not None and not isiterable(partitions):
             partitions = [partitions]
         self.partitions = partitions
@@ -43,19 +33,18 @@ class TopicsResult(object):
         if isiterable(results):
             if self.partitions and self.topic:
                 def _parser(item):
-                    if isinstance(result_parser,ResultParser):
-                        return [item['Timestamp']].append(result_parser.fn(item['Data']))
+                    if callable(result_parser):
+                        l = result_parser(item['Data'])
+                        l.insert(0, np.datetime64(item['Timestamp']))
+                        return l
                     else:
-                        return [item['Timestamp'],item['Data']]
-
-                def _header():
-                    if isinstance(result_parser,ResultParser):
-                        return np.dtype("M,{}".format(result_parser.dt))
+                        return [np.datetime64(item['Timestamp']), item['Data']]
+                
+                for item in results:
+                    if self.results is None:
+                        self.results = np.array([_parser(item)])
                     else:
-                        return np.dtype("M,V")
-                        
-                self.results = np.array([_parser(item) for item in results], dtype=_header())
-                a = self.results
+                        self.results = np.append(self.results, [_parser(item)], axis=0)
             else:
                 self.results = np.array([item for item in results],dtype=np.dtype('U'))
 
