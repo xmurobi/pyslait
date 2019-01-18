@@ -1,16 +1,18 @@
 from __future__ import absolute_import
-import numpy as np
-import pandas as pd
-import re
-import requests
-import logging
-import six
+
 import json
-import pytz
+import logging
+import re
 from datetime import datetime, timedelta
 
-from .stream import StreamConn
+import numpy as np
+import pandas as pd
+import pytz
+import requests
+import six
+
 from .data import TopicsResult
+# from .stream import StreamConn
 
 logger = logging.getLogger(__name__)
 
@@ -27,53 +29,19 @@ def isiterable(something):
     return isinstance(something, (list, tuple, set))
 
 
-# def get_rpc_client(codec='msgpack'):
-#     if codec == 'msgpack':
-#         return MsgpackRpcClient
-#     return JsonRpcClient
-
-
-def get_timestamp(value):
-    if value is None:
-        return None
+def datestring(value):
     if isinstance(value, (int, np.integer)):
-        return pd.Timestamp(value, unit='s')
-    return pd.Timestamp(value)
+        value = datetime.fromtimestamp(value)
+    elif value is None or not isinstance(value, datetime):
+        value = datetime.now()
 
-
-class Params(object):
-    pass
-    # def __init__(self, symbols, timeframe, attrgroup,
-    #              start=None, end=None,
-    #              limit=None, limit_from_start=None):
-    #     if not isiterable(symbols):
-    #         symbols = [symbols]
-    #     self.tbk = ','.join(symbols) + "/" + timeframe + "/" + attrgroup
-    #     self.key_category = None  # server default
-    #     self.start = get_timestamp(start)
-    #     self.end = get_timestamp(end)
-    #     self.limit = limit
-    #     self.limit_from_start = limit_from_start
-    #     self.functions = None
-
-    # def set(self, key, val):
-    #     if not hasattr(self, key):
-    #         raise AttributeError()
-    #     if key in ('start', 'end'):
-    #         setattr(self, key, get_timestamp(val))
-    #     else:
-    #         setattr(self, key, val)
-    #     return self
-
-    # def __repr__(self):
-    #     content = ('tbk={}, start={}, end={}, '.format(
-    #         self.tbk, self.start, self.end,
-    #     ) +
-    #         'limit={}, '.format(self.limit) +
-    #         'limit_from_start={}'.format(self.limit_from_start))
-    #     return 'Params({})'.format(content)
+    # value = value.replace(tzinfo=pytz.UTC)
+    return value.isoformat() + 'Z' if value.microsecond > 0 else ''
 
 class Client(object):
+    """
+    Client use REST & websocket communicate with Slait
+    """
     codec = json
     mimetype = "application/json"
 
@@ -92,6 +60,7 @@ class Client(object):
         1. List all topics
         2. List partitions under specific topic
         3. List data under specific topic and partition with from,to,last[optional] paramters
+        Return TopicsResult object if query success
         """
         isDetails = False
 
@@ -105,9 +74,7 @@ class Client(object):
             if toDate is None:
                 toDate = datetime.now()
 
-            fromDate = fromDate.replace(tzinfo=pytz.UTC)
-            toDate = toDate.replace(tzinfo=pytz.UTC)
-            path = "topics/{}/{}?from={}&to={}".format(topic,partition,fromDate.isoformat(),toDate.isoformat())
+            path = "topics/{}/{}?from={}&to={}".format(topic,partition,datestring(fromDate),datestring(toDate))
 
             # only the last n
             if last is not None and isinstance(last, int):
@@ -126,7 +93,7 @@ class Client(object):
 
             rj = r.json()
             if isDetails:
-                if not callable(fn_entry_data_decoder):
+                if callable(fn_entry_data_decoder):
                     return TopicsResult(topic=topic, partitions=partition, results=rj['Data'], result_parser=fn_entry_data_decoder)
                 else:
                     return TopicsResult(topic=topic, partitions=partition, results=rj['Data'])
@@ -138,7 +105,7 @@ class Client(object):
             logger.exception(exc)
             raise
 
-    def create(self, topic, partitoins=None, entries=None, fn_entry_data_encoder=None):
+    def create(self, topic, partitions=None, entries=None, fn_entry_data_encoder=None):
         """
         1. Create topic
         2. Create topic and also with partition(s)
@@ -153,14 +120,27 @@ class Client(object):
             path = ''
 
             # 2. Create topic and partitions
-            if isinstance(partitoins,list) and len(partitoins) > 1:
+            if isinstance(partitions,list) and len(partitions) > 1:
                 path = "topics"
                 data['Topic'] = topic
-                data['Partitions'] = partitoins
+                data['Partitions'] = partitions
             
             # 3. Append entries
-            elif isinstance(partitoins, list) and len(partitoins) > 1 and isinstance(entries, list) and len(entries) > 0:
-                
+            elif isinstance(partitions, list) and len(partitions) == 1 and isinstance(entries, list) and len(entries) > 0:
+                path = "topics/{}/{}".format(topic,partitions[0])
+
+                if not callable(fn_entry_data_encoder):
+                    def _f(entries):
+                        now = datestring(None)
+                        ret = []
+                        for en in entries:
+                            ret.append({'Timestamp':now, 'Data':self.codec.dumps(en)})
+
+                        return ret
+                    fn_entry_data_encoder = _f
+
+                data['Data'] = fn_entry_data_encoder(entries)
+
             # 1. Topic only
             else:
                 path = "topics"
@@ -169,96 +149,58 @@ class Client(object):
             try:
                 u = self._url(path)
 
-                if not data['Topic']:
-                    r = self._session.put(u, data=json.loads(data), headers={"Content-Type": self.mimetype})
+                if data.get('Data') != None:
+                    r = self._session.put(u, data=self.codec.dumps(data), headers={"Content-Type": self.mimetype})
+                elif data.get('Topic') != None:
+                    r = self._session.post(u, data=self.codec.dumps(data), headers={"Content-Type": self.mimetype})
                 else:
-                    r = self._session.post(u, data=json.loads(data), headers={"Content-Type": self.mimetype})
+                    return False
 
                 r.raise_for_status()
                 return True
 
             except requests.exceptions.HTTPError as exc:
+                logger.exception(exc)
                 return False
 
+    def delete(self, topic=None, partition=None):
+        """
+        1. Delete all topics(clear the slait)
+        2. Delete all partitions under a specific topic
+        3. Delete all entries under a specific topic and partition
+        """
+        path = None
+        if not topic:
+        # 1. delete all topics
+            path = "topics"
+        elif not partition:
+        # 2. delete specific topic
+            path = "topics/{}".format(topic)
+        elif len(topic) > 0 and len(partition) > 0:
+        # 3. delete all entries under partition
+            path = "topics/{}/{}".format(topic, partition)
+        
+        try:
+            u = self._url(path)
+            r = self._session.delete(u)
+            r.raise_for_status()
+            return True
+        except requests.exceptions.HTTPError as exc:
+            return False
 
-    def delete(self):
-        pass
+    def heartbeat(self):
+        try:
+            u = self._url("heartbeat")
+            r = self._session.head(u)
 
-    # def query(self, params):
-    #     if not isiterable(params):
-    #         params = [params]
-    #     query = self.build_query(params)
-    #     reply = self._request('DataService.Query', **query)
-    #     return QueryReply(reply)
-
-    # def write(self, recarray, tbk, isvariablelength=False):
-    #     data = {}
-    #     data['types'] = [
-    #         recarray.dtype[name].str.replace('<', '')
-    #         for name in recarray.dtype.names
-    #     ]
-    #     data['names'] = recarray.dtype.names
-    #     data['data'] = [
-    #         bytes(buffer(recarray[name])) if six.PY2
-    #             else bytes(memoryview(recarray[name]))
-    #         for name in recarray.dtype.names
-    #     ]
-    #     data['length'] = len(recarray)
-    #     data['startindex'] = {tbk: 0}
-    #     data['lengths'] = {tbk: len(recarray)}
-    #     write_request = {}
-    #     write_request['dataset'] = data
-    #     write_request['is_variable_length'] = isvariablelength
-    #     writer = {}
-    #     writer['requests'] = [write_request]
-    #     try:
-    #         reply = self.rpc.call("DataService.Write", **writer)
-    #     except requests.exceptions.ConnectionError:
-    #         raise requests.exceptions.ConnectionError(
-    #             "Could not contact server")
-    #     reply_obj = self.rpc.codec.loads(reply.content, encoding='utf-8')
-    #     resp = self.rpc.response(reply_obj)
-    #     return resp
-
-    # def build_query(self, params):
-    #     reqs = []
-    #     if not isiterable(params):
-    #         params = [params]
-    #     for param in params:
-    #         req = {
-    #             'destination': param.tbk,
-    #         }
-    #         if param.key_category is not None:
-    #             req['key_category'] = param.key_category
-    #         if param.start is not None:
-    #             req['epoch_start'] = int(param.start.value / (10 ** 9))
-    #         if param.end is not None:
-    #             req['epoch_end'] = int(param.end.value / (10 ** 9))
-    #         if param.limit is not None:
-    #             req['limit_record_count'] = int(param.limit)
-    #         if param.limit_from_start is not None:
-    #             req['limit_from_start'] = bool(param.limit_from_start)
-    #         if param.functions is not None:
-    #             req['functions'] = param.functions
-    #         reqs.append(req)
-    #     return {
-    #         'requests': reqs,
-    #     }
-
-    # def list_symbols(self):
-    #     reply = self._request('DataService.ListSymbols')
-    #     if 'Results' in reply.keys():
-    #         return reply['Results']
-    #     return []
-
-    # def server_version(self):
-    #     resp = requests.head(self.endpoint)
-    #     return resp.headers.get('Marketstore-Version')
+            r.raise_for_status()
+            return True
+        except requests.exceptions.HTTPError as exc:
+            return False
 
     # def stream(self):
-    #     endpoint = re.sub('^http', 'ws',
-    #                       re.sub(r'/rpc$', '/ws', self.endpoint))
+    #     endpoint = re.sub('^http', 'ws', self._url('ws'))
     #     return StreamConn(endpoint)
 
     def __repr__(self):
-        return 'Client("{}")'.format(self.endpoint)
+        return 'Client("{}")'.format(self._endpoint)

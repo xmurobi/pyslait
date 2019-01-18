@@ -34,6 +34,7 @@ setup(
         'urllib3',
         'pytest',
         'websocket-client',
+        'goto-statement',
     ],
     tests_require=[
         'pytest',

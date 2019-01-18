@@ -1,10 +1,12 @@
 import pyslait
+import json
 import numpy as np
 try:
     from unittest.mock import patch
 except ImportError:
     from mock import patch
 import imp
+from datetime import datetime,timedelta
 
 imp.reload(pyslait.client)
 
@@ -15,57 +17,32 @@ def test_client_init():
     c = pyslait.Client("http://127.0.0.1:5994/")
     assert c._endpoint == "http://127.0.0.1:5994/"
 
-def test_client_list():
-    # c = pyslait.Client("http://192.168.220.128:5994/")
-    c = pyslait.Client("http://127.0.0.1:5994/")
-    l = c.list()
-    print(l)
+def test_rest():
+    c = pyslait.Client("http://192.168.220.128:5994/")
+    # c = pyslait.Client("http://127.0.0.1:5994/")
 
+    # clear slait
+    assert c.delete()
 
-# @patch('pymarketstore.client.MsgpackRpcClient')
-# def test_query(MsgpackRpcClient):
-#     c = pymkts.Client()
-#     p = pymkts.Params('BTC', '1Min', 'OHLCV')
-#     c.query(p)
-#     assert MsgpackRpcClient().call.called == 1
+    # test create
+    assert c.create("bars")
+    assert c.create("lobs",partitions=["BTC","ETH"])
+    assert c.create("lobs",partitions=["BTC"],entries=[{"A0":111},{"A1":112},{"B0":110},{"B1":108}])
 
+    # test list
+    assert len(c.list().results) == 2
+    assert len(c.list(topic="bars").results) == 0
+    assert len(c.list(topic="aabb").results) == 0
+    assert len(c.list(topic="lobs",partition="BTC",fromDate=(datetime.now() - timedelta(hours=2)),toDate=datetime.now()).results) == 4
+    assert c.list(topic="lobs",partition="BTC",fromDate=(datetime.now() - timedelta(hours=2)),toDate=datetime.now(),
+        fn_entry_data_decoder=lambda x:[json.loads(x)]).results[1][1]["A1"] == 112
 
-# @patch('pymarketstore.client.MsgpackRpcClient')
-# def test_write(MsgpackRpcClient):
-#     c = pymkts.Client()
-#     data = np.array([(1, 0)], dtype=[('Epoch', 'i8'), ('Ask', 'f4')])
-#     tbk = 'TEST/1Min/TICK'
-#     c.write(data, tbk)
-#     assert MsgpackRpcClient().call.called == 1
+    # test delete
+    assert c.delete(topic="aabb")
+    assert c.delete(topic="lobs",partition="ETH")
 
+    # test heartbeat
+    assert c.heartbeat()
 
-# def test_build_query():
-#     c = pymkts.Client("127.0.0.1:5994")
-#     p = pymkts.Params('TSLA', '1Min', 'OHLCV', 1500000000, 4294967296)
-#     p2 = pymkts.Params('FORD', '5Min', 'OHLCV', 1000000000, 4294967296)
-#     query_dict = c.build_query([p, p2])
-#     test_lst = []
-#     param_dict1 = {
-#         'destination': 'TSLA/1Min/OHLCV',
-#         'epoch_start': 1500000000,
-#         'epoch_end': 4294967296
-#     }
-#     test_lst.append(param_dict1)
-#     param_dict2 = {
-#         'destination': 'FORD/5Min/OHLCV',
-#         'epoch_start': 1000000000,
-#         'epoch_end': 4294967296
-#     }
-#     test_lst.append(param_dict2)
-#     test_query_dict['requests'] = test_lst
-#     assert query_dict == test_query_dict
-
-#     query_dict = c.build_query(p)
-#     assert query_dict == {'requests': [param_dict1]}
-
-
-# @patch('pymarketstore.client.MsgpackRpcClient')
-# def test_list_symbols(MsgpackRpcClient):
-#     c = pymkts.Client()
-#     c.list_symbols()
-#     assert MsgpackRpcClient().call.called == 1
+def test_socket():
+    pass
