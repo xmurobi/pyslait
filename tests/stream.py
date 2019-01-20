@@ -4,7 +4,8 @@ if __name__ == '__main__' and __package__ is None:
     sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
     import pyslait
 
-    sc = pyslait.StreamClient("http://192.168.220.128:5994/")
+    # sc = pyslait.StreamClient("http://192.168.220.128:5994/")
+    sc = pyslait.StreamClient("http://127.0.0.1:5994/")
 
     @sc.onCtrl("lobs","BTC")
     def on_ctrl(streamClient, msg):

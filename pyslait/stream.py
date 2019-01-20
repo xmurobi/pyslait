@@ -33,16 +33,23 @@ class StreamClient(Client):
             while True:
                 r = self._subws.recv()
 
-                if len(r) > 0:
-                    msg = self.codec.loads(r, encoding='utf-8')
+                try:
+                    if len(r) > 0:
+                        msg = self.codec.loads(r, encoding='utf-8')
 
-                    entries = msg.get('Entries')
-                    if entries is not None:
-                        self._dispatch_data(msg['Topic'],msg['Partition'],msg)
-                    else:
-                        a = msg.get('Action')
-                        if a is not None:
-                            self._dispatch_ctrl(msg['Topic'], msg['Partition'],msg)
+                        topic = msg.get('Topic')
+                        partition = msg.get('Partition')
+                        entries = msg.get('Entries')
+                        action = msg.get('Action')
+
+                        if topic is not None and partition is not None and entries is not None:
+                            self._dispatch_data(topic, partition, msg)
+                        elif action is not None:
+                            self._dispatch_ctrl(topic, partition, msg)
+
+                except Exception as exc:
+                    # logger.exception(exc)
+                    continue
 
         finally:
             self._subws.close()
@@ -67,10 +74,17 @@ class StreamClient(Client):
             ws.close()
 
     def _dispatch_data(self, topic, partition, msg):
-        self._handlers[topic][partition](self, msg)
+        try:
+            self._handlers[topic][partition](self, msg)
+        except Exception as exc:
+            return
 
     def _dispatch_ctrl(self, topic, partition, msg):
-        self._controls[topic][partition](self, msg)
+        try:
+            self._controls[topic][partition](self, msg)
+        except Exception as exc:
+            return
+
 
     def onData(self, topic, partition):
         def decorator(func):
