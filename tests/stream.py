@@ -1,5 +1,5 @@
 
-if __name__ == '__main__' and __package__ is None:
+def subscriber_test():
     from os import sys, path
     sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
     import pyslait
@@ -13,6 +13,14 @@ if __name__ == '__main__' and __package__ is None:
 
     @sc.onData("lobs","BTC")
     def on_data(streamClient, msg):
-        print('Got data:', msg)
+        print('Got BTC data:', msg)
+
+    @sc.onData("lobs","ETH")
+    def on_data(streamClient, msg):
+        print('Got ETH data:', msg)
 
     sc.runsub(pyslait.SocketMessage.handshakeSubscribers(topic="lobs", partitions=["BTC","ETH"]))
+
+
+if __name__ == '__main__' and __package__ is None:
+    subscriber_test()

@@ -8,12 +8,23 @@ from .data import SocketMessage
 from .client import Client
 
 class StreamClient(Client):
+    # try to reconnect every 3 seconds
     reconnect_seconds = 3
+    # < 0 means reconnect forever, > 0 means 
+    # action of reconnect has sup 
+    max_reconnection_counts = -1    
 
-    def __init__(self, endpoint='http://localhost:5994/'):
+    def __init__(self, endpoint='http://localhost:5994/', reconnection_seconds=3, max_reconnection_counts=-1):
         super().__init__(endpoint=endpoint)
         self._handlers = {}
         self._controls = {}
+        self._publisher_ready = False
+        self.reconnect_seconds = reconnection_seconds
+        self.max_reconnection_counts = max_reconnection_counts
+        self.pub_reconnect_counts = 0
+        self.sub_reconnect_counts = 0
+        self._subws = None
+        self._pubws = None
 
     def _connect(self):
         ws = websocket.WebSocket()
@@ -23,13 +34,20 @@ class StreamClient(Client):
     @with_goto
     def runsub(self, subMessages):
         label .begin
-        self._subws = self._connect()
 
         try:
+            if self._subws is None:
+                self._subws = websocket.WebSocket()
+            
+            # connect to slait
+            self._subws.connect(re.sub('^http', 'ws', self._url('ws')))
+
+            # send message to book topic/partitions
             for s in subMessages:
                 if isinstance(s, SocketMessage) and s.Action == 'subscribe':
                     self._subws.send(s.toJSON())
 
+            # loop to receive messages
             while True:
                 r = self._subws.recv()
 
@@ -48,30 +66,62 @@ class StreamClient(Client):
                             self._dispatch_ctrl(topic, partition, msg)
 
                 except Exception as exc:
+                    continue
+
+        finally:
+            if self._subws is not None:
+                self._subws.close()
+
+            # reconnect or finish
+            if self.reconnect_seconds > 0:
+                time.sleep(self.reconnect_seconds)
+                self.sub_reconnect_counts += 1
+
+                if self.max_reconnection_counts > 0 and self.sub_reconnect_counts >= self.max_reconnection_counts:
+                    return
+
+                goto .begin
+
+    @with_goto
+    def runpub(self, msg):
+        label .begin
+        self._pubws = self._connect()
+
+        try:
+            if isinstance(msg, SocketMessage) and msg.Action == 'publish':                    
+                self._pubws.send(msg.toJSON())
+            else:
+                return
+
+            while True:
+                r = self._pubws.recv()
+
+                try:
+                    if len(r) > 0:
+                        msg = self.codec.loads(r, encoding='utf-8')
+
+                        if msg.get('Action') == 'ready':
+                            self._publisher_ready = True
+                    elif not self._pubws.connected:
+                        self._publisher_ready = False
+                        break
+
+                except Exception as exc:
                     # logger.exception(exc)
                     continue
 
         finally:
-            self._subws.close()
+            self._pubws.close()
 
+            # reconnect or finish
             if self.reconnect_seconds > 0:
                 time.sleep(self.reconnect_seconds)
+                self.pub_reconnect_counts += 1
+
+                if self.max_reconnection_counts > 0 and self.pub_reconnect_counts >= self.max_reconnection_counts:
+                    return
+
                 goto .begin
-
-    def runpub(self, pubMessage):
-        ws = self._connect()
-
-        try:
-            if isinstance(pubMessage, SocketMessage) and pubMessage.Action == 'publish':
-                ws.send(self.codec.dumps(pubMessage), opcode=ABNF.OPCODE_BINARY)
-
-                r = ws.recv()
-                msg = self.codec.loads(r, encoding='utf-8')
-                if msg.get('Action') == 'ready':
-                    pass
-
-        except Exception as exc:
-            ws.close()
 
     def _dispatch_data(self, topic, partition, msg):
         try:
@@ -100,6 +150,13 @@ class StreamClient(Client):
 
         return decorator
 
+    def onReady(self):
+        def decorator(func):
+            self.register(topic, partition, func, innerhandler="_controls")
+            return func
+
+        return decorator
+
 
     def register(self, topic, partition, func, innerhandler=None):
         if isinstance(topic, str) and isinstance(partition, str):
@@ -122,5 +179,13 @@ class StreamClient(Client):
 
 
     def publish(self, publication):
-        pass
+        """
+        Published the data to slait server
+        False if connection lost otherwise always True
+        """
+        if self._pubws is not None and self._pubws.connected and self._publisher_ready:
+
+            return True
+        else:
+            return False
 
