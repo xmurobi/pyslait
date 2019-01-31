@@ -4,6 +4,8 @@ import websocket
 import time
 import logging
 from goto import with_goto
+from contextlib import ExitStack
+from functools import partial
 from .data import SocketMessage
 from .client import Client
 
@@ -51,43 +53,41 @@ class StreamClient(Client):
 
     def _run_websocket(self, name, on_data=None, on_open=None, on_close=None):
 
-        def _on_reconnect(ws, error):
-            while True:
-                if self._connctions.get(name):
-                    logger.debug('Inside retry %s', self._connctions[name].reconnect_counts)
+        def _on_reconnect():
+            if self._connctions.get(name):
+                logger.debug('Inside retry %s', self._connctions[name].reconnect_counts)
 
-                try:
-                    host = re.sub('^http', 'ws', self._url('ws'))
-                    ws = websocket.WebSocketApp(host, 
-                        on_open=on_open, 
-                        on_data=on_data, 
-                        on_close=on_close,
-                        on_error=_on_reconnect) 
+            try:
+                host = re.sub('^http', 'ws', self._url('ws'))
+                ws = websocket.WebSocketApp(host, 
+                    on_open=on_open, 
+                    on_data=on_data, 
+                    on_close=on_close) 
 
-                    if ws is not None:
-                        logger.info('WSConnected[%s] to hostname: %s' , name, host)
-                        if not self._connctions.get(name):
-                            self._connctions[name] = Connection(ws)
-                        else:
-                            self._connctions[name].retry(ws)
+                if ws is not None:
+                    logger.info('WSConnected[%s] to hostname: %s' , name, host)
+                    if not self._connctions.get(name):
+                        self._connctions[name] = Connection(ws)
+                    else:
+                        self._connctions[name].retry(ws)
 
-                        ws.run_forever()
-                        return True
+                    # with ExitStack() as s:
+                    #     s.callback(ws.run_forever)
+                    ws.run_forever()
 
-                except websocket.WebSocketException as e:
-                    logger.error("WebSocketException: Failed to recreat connection to hos, please ensure network connection to host: %s, exc: %s", host, e)
-                    return False
-                except websocket.WebSocketConnectionClosedException as e:
-                    logger.error("WebSocketConnectionClosedException:Failed to recreat connection to hos, please ensure network connection to host: %s, exc: %s", host, e)
-                    return False
-                except websocket.WebSocketTimeoutException as e:
-                    logger.error("WebSocketTimeoutException: Failed to recreat connection to hos, please ensure network connection to host: %s, exc: %s", host, e)
-                    return False
-                except Exception as e:
-                    logger.error("Exception: Failed to recreat connection to hos, please ensure network connection to host: %s, exc: %s", host, e)
-                    return False
+            except websocket.WebSocketException as e:
+                logger.error("WebSocketException: Failed to recreat connection to hos, please ensure network connection to host: %s, exc: %s", host, e)
+            except websocket.WebSocketConnectionClosedException as e:
+                logger.error("WebSocketConnectionClosedException:Failed to recreat connection to hos, please ensure network connection to host: %s, exc: %s", host, e)
+            except websocket.WebSocketTimeoutException as e:
+                logger.error("WebSocketTimeoutException: Failed to recreat connection to hos, please ensure network connection to host: %s, exc: %s", host, e)
+            except Exception as e:
+                logger.error("Exception: Failed to recreat connection to hos, please ensure network connection to host: %s, exc: %s", host, e)
 
-        while not _on_reconnect(None, None):
+        while True:
+
+            _on_reconnect()
+
             if self.reconnect_seconds > 0:
                 if self.max_reconnection_counts > 0 and self._connctions.get(name) and self._connctions[name].reconnect_counts >= self.max_reconnection_counts:
                     return
@@ -96,8 +96,7 @@ class StreamClient(Client):
             else:
                 return
 
-
-    def runsub(self, subMessages):
+    def runsub(self, topic, partitions):
 
         def _on_data(ws, data, type, flag):
             if len(data) > 0:
@@ -115,101 +114,39 @@ class StreamClient(Client):
 
         def _on_open(ws):
             # Book topic/partitions
-            for s in subMessages:
+            socket_messages = SocketMessage.handshakeSubscribers(topic=topic, partitions=partitions)
+            for s in socket_messages:
                 if isinstance(s, SocketMessage) and s.Action == 'subscribe':
                     ws.send(s.toJSON())
 
         def _on_close(ws):
-            self._dispatch_ctrl('__sub__','__all__','closed')
+            for p in partitions:
+                self._dispatch_ctrl(topic, p, '__sub__closed__')
 
         self._run_websocket('__runsub__',on_data=_on_data, on_close=_on_close, on_open=_on_open)
 
-        # try:
-        #     if self._subws is None:
-        #         self._subws = websocket.WebSocket()
-            
-        #     # connect to slait
-        #     self._subws.connect(re.sub('^http', 'ws', self._url('ws')))
 
-        #     # send message to book topic/partitions
-        #     for s in subMessages:
-        #         if isinstance(s, SocketMessage) and s.Action == 'subscribe':
-        #             self._subws.send(s.toJSON())
+    def runpub(self, topic, partition):
 
-        #     # loop to receive messages
-        #     while True:
-        #         r = self._subws.recv()
+        def _on_data(ws, data, type, flag):
+            if len(data) > 0:
+                msg = self.codec.loads(data, encoding='utf-8')
 
-        #         try:
-        #             if len(r) > 0:
-        #                 msg = self.codec.loads(r, encoding='utf-8')
-
-        #                 topic = msg.get('Topic')
-        #                 partition = msg.get('Partition')
-        #                 entries = msg.get('Entries')
-        #                 action = msg.get('Action')
-
-        #                 if topic is not None and partition is not None and entries is not None:
-        #                     self._dispatch_data(topic, partition, msg)
-        #                 elif action is not None:
-        #                     self._dispatch_ctrl(topic, partition, msg)
-
-        #         except Exception as exc:
-        #             continue
-
-        # finally:
-        #     if self._subws is not None:
-        #         self._subws.close()
-
-        #     # reconnect or finish
-        #     if self.reconnect_seconds > 0:
-        #         time.sleep(self.reconnect_seconds)
-        #         self.sub_reconnect_counts += 1
-
-        #         if self.max_reconnection_counts > 0 and self.sub_reconnect_counts >= self.max_reconnection_counts:
-        #             return
+                if msg.get('Action') == 'ready':
+                    self._dispatch_ctrl(topic, partition, '__pub__ready__')
 
 
-    @with_goto
-    def runpub(self, msg):
-        label .begin
-        self._pubws = self._connect()
+        def _on_open(ws):
+            socket_messages = SocketMessage.handshakePublisher(topic=topic, partitions=partition)
+            for s in socket_messages:
+                if isinstance(s, SocketMessage) and s.Action == 'publish':
+                    ws.send(s.toJSON())
 
-        try:
-            if isinstance(msg, SocketMessage) and msg.Action == 'publish':                    
-                self._pubws.send(msg.toJSON())
-            else:
-                return
+        def _on_close(ws):
+            self._dispatch_ctrl(topic, partition, '__pub__closed__')
 
-            while True:
-                r = self._pubws.recv()
+        self._run_websocket('__runpub__',on_data=_on_data, on_close=_on_close, on_open=_on_open)
 
-                try:
-                    if len(r) > 0:
-                        msg = self.codec.loads(r, encoding='utf-8')
-
-                        if msg.get('Action') == 'ready':
-                            self._publisher_ready = True
-                    elif not self._pubws.connected:
-                        self._publisher_ready = False
-                        break
-
-                except Exception as exc:
-                    # logger.exception(exc)
-                    continue
-
-        finally:
-            self._pubws.close()
-
-            # reconnect or finish
-            if self.reconnect_seconds > 0:
-                time.sleep(self.reconnect_seconds)
-                self.pub_reconnect_counts += 1
-
-                if self.max_reconnection_counts > 0 and self.pub_reconnect_counts >= self.max_reconnection_counts:
-                    return
-
-                goto .begin
 
     def _dispatch_data(self, topic, partition, msg):
         try:
@@ -223,30 +160,7 @@ class StreamClient(Client):
         except Exception as exc:
             return
 
-
-    def onData(self, topic, partition):
-        def decorator(func):
-            self.register(topic, partition, func)
-            return func
-
-        return decorator
-    
-    def onCtrl(self, topic, partition):
-        def decorator(func):
-            self.register(topic, partition, func, innerhandler="_controls")
-            return func
-
-        return decorator
-
-    def onReady(self):
-        def decorator(func):
-            self.register(topic, partition, func, innerhandler="_controls")
-            return func
-
-        return decorator
-
-
-    def register(self, topic, partition, func, innerhandler=None):
+    def _register(self, topic, partition, func, innerhandler=None):
         if isinstance(topic, str) and isinstance(partition, str):
             innerhandler = "_handlers" if not innerhandler else innerhandler
             d = getattr(self,innerhandler)
@@ -258,21 +172,40 @@ class StreamClient(Client):
                     d[topic][partition] = func
 
 
-    def deregister(self, topic, partition, innerhandler=None):
+    def _deregister(self, topic, partition, innerhandler=None):
         if isinstance(topic, str) and isinstance(partition, str):
             innerhandler = "_handlers" if not innerhandler else innerhandler
             d = getattr(self,innerhandler)
             if isinstance(d, dict):
                 del d[topic][partition]
 
+    def onData(self, topic, partition):
+        def decorator(func):
+            self._register(topic, partition, func)
+            return func
 
-    def publish(self, publication):
+        return decorator
+    
+    def onCtrl(self, topic, partition):
+        def decorator(func):
+            self._register(topic, partition, func, innerhandler="_controls")
+            return func
+
+        return decorator
+
+    def publish(self, topic, partition, data):
         """
         Published the data to slait server
         False if connection lost otherwise always True
+        topic: the topic which data related to 
+        partition: the partition under the topic which data related to
+        data: MUST be a list which element(dict) contained two keys named 'Data' and 'Timestamp'
         """
-        if self._pubws is not None and self._pubws.connected and self._publisher_ready:
+        c = self._connctions.get('__runpub__')
 
+        if c and c.ws is not None:
+            sm = SocketMessage('pub', topic=topic, partitions=partition, entries=data)
+            c.ws.send(sm.toJSON())
             return True
         else:
             return False
