@@ -43,7 +43,7 @@ def publisher_test():
 
     @sc.onCtrl("lobs","BTC")
     def on_ctrl(streamClient, msg):
-        if msg == '__pub__ready__':
+        if msg == pyslait.data.CtrlMessage.PUB_READY:
             l = dgen()
             sc.publish("lobs", "BTC", l)
             print('Publish[lobs/BTC] :', l)

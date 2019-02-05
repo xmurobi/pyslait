@@ -6,7 +6,7 @@ import logging
 from goto import with_goto
 from contextlib import ExitStack
 from functools import partial
-from .data import SocketMessage
+from .data import SocketMessage, CtrlMessage
 from .client import Client
 
 logger = logging.getLogger(__name__)
@@ -43,13 +43,6 @@ class StreamClient(Client):
         self._publisher_ready = False
         self.reconnect_seconds = reconnection_seconds
         self.max_reconnection_counts = max_reconnection_counts
-
-
-
-        self.pub_reconnect_counts = 0
-        self.sub_reconnect_counts = 0
-        self._subws = None
-        self._pubws = None
 
     def _run_websocket(self, name, on_data=None, on_open=None, on_close=None):
 
@@ -121,7 +114,7 @@ class StreamClient(Client):
 
         def _on_close(ws):
             for p in partitions:
-                self._dispatch_ctrl(topic, p, '__sub__closed__')
+                self._dispatch_ctrl(topic, p, CtrlMessage.SUB_CLOSED)
 
         self._run_websocket('__runsub__',on_data=_on_data, on_close=_on_close, on_open=_on_open)
 
@@ -133,7 +126,7 @@ class StreamClient(Client):
                 msg = self.codec.loads(data, encoding='utf-8')
 
                 if msg.get('Action') == 'ready':
-                    self._dispatch_ctrl(topic, partition, '__pub__ready__')
+                    self._dispatch_ctrl(topic, partition, CtrlMessage.PUB_READY)
 
 
         def _on_open(ws):
@@ -143,7 +136,7 @@ class StreamClient(Client):
                     ws.send(s.toJSON())
 
         def _on_close(ws):
-            self._dispatch_ctrl(topic, partition, '__pub__closed__')
+            self._dispatch_ctrl(topic, partition, CtrlMessage.PUB_CLOSED)
 
         self._run_websocket('__runpub__',on_data=_on_data, on_close=_on_close, on_open=_on_open)
 
