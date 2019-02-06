@@ -3,9 +3,15 @@ import pandas as pd
 import six
 import jsonpickle
 from datetime import datetime
+from enum import Enum
 
 def isiterable(something):
     return isinstance(something, (list, tuple, set))
+
+class CtrlMessage(Enum):
+    SUB_CLOSED = '__sub__closed__'
+    PUB_CLOSED = '__pub__closed__'
+    PUB_READY = '__pub__ready__'
 
 class JsonObject(object):
     def toJSON(self):

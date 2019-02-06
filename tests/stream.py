@@ -43,7 +43,7 @@ def publisher_test():
 
     @sc.onCtrl("lobs","BTC")
     def on_ctrl(streamClient, msg):
-        if msg == '__pub__ready__':
+        if msg == pyslait.data.CtrlMessage.PUB_READY:
             l = dgen()
             sc.publish("lobs", "BTC", l)
             print('Publish[lobs/BTC] :', l)
@@ -58,6 +58,7 @@ def subpub_test():
     from os import sys, path
     sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
     import threading
+    import time
 
     s = threading.Thread(target=subscriber_test)
     p = threading.Thread(target=publisher_test)
@@ -66,9 +67,17 @@ def subpub_test():
     p.setDaemon(True)
 
     s.start()
+    print('Subscriber started...')
+
+    time.sleep(3)
+
     p.start()
+    print('Publisher started...')
+
+    time.sleep(10)
 
 
 if __name__ == '__main__' and not __package__:
     # subscriber_test()
-    publisher_test()
+    # publisher_test()
+    subpub_test()
